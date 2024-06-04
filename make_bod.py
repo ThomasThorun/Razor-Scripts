@@ -4,6 +4,7 @@ from System import Int32
 from AutoComplete import *
 
 
+
 class Bod:
     def __init__(self, skill, serial):
         self.skill = skill
