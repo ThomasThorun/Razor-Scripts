@@ -3,11 +3,14 @@ from System import Int32
 import sys
 from AutoComplete import *
 
+cut_fish = False
 
-fish_info = {0x3E65: ('E', [(x, y) for x in range(0, 13, 6) for y in range(-12, 13, 6) if (x, y) != (0, 0)]),
-             0x3EB9: ('S', [(x, y) for x in range(-12, 13, 6) for y in range(0, 13, 6) if (x, y) != (0, 0)]),
-             0x3E93: ('W', [(x, y) for x in range(0, -13, -6) for y in range(-12, 13, 6) if (x, y) != (0, 0)]),
-             0x3EAE: ('N', [(x, y) for x in range(-12, 13, 6) for y in range(0, -13, -6) if (x, y) != (0, 0)])}
+fish_info = {(0x3E65, 0x5C96): ('E', [(x, y) for x in range(0, 13, 6) for y in range(-12, 13, 6) if (x, y) != (0, 0)]),
+             (0x3EB9, 0x5C2A): ('S', [(x, y) for x in range(-12, 13, 6) for y in range(0, 13, 6) if (x, y) != (0, 0)]),
+             (0x3E93, 0x5BF4): (
+             'W', [(x, y) for x in range(0, -13, -6) for y in range(-12, 13, 6) if (x, y) != (0, 0)]),
+             (0x3EAE, 0x5C60): (
+             'N', [(x, y) for x in range(-12, 13, 6) for y in range(0, -13, -6) if (x, y) != (0, 0)])}
 
 utils = {'fishing_pole': 0x0DC0, 'fish_steak': 0x097A, 'white_pearl': 0x3196, 'fish_mess': 0x0DD6,
          'delicate scales': 0x573A,
@@ -19,6 +22,8 @@ trash = {'boots': 0x170B, 'thigh boots': 0x1711, 'sandals': 0x170D, 'shoes': 0x1
 fishs = {"fish": [0x09CC, 0x09CD, 0x09CE, 0x09CF], "yellowtail barracuda": [0x44C3, 0x44C4],
          "blue marlin": [0x4304, 0x4305], "sunfish": [0x4306, 0x4307], "green catfish": [0x44C5, 0x44C6],
          "yellow perch": [0x4302, 0x4303]}
+
+color_list = [0x0000, 0x083D, 0x0485, 0x0782, 0x08A6, 0x07A8, 0x0A2F]
 
 fish_id_list = [f for fish in fishs.values() for f in fish]
 
@@ -62,11 +67,18 @@ def set_shared(name, _msg):
     return item
 
 
+def get_hatch_key():
+    for k in fish_info.keys():
+        if hatch.ItemID in k:
+            return k
+    error("Error. Hatch key not found. Finishing.", True)
+
+
 def get_hatch():
     hatch_filter = Items.Filter()
     hatch_filter.OnGround = 1
     hatch_filter.RangeMax = 7
-    hatch_filter.Graphics = List[Int32](fish_info.keys())
+    hatch_filter.Graphics = List[Int32]([hatch_id for hatch_id_list in fish_info.keys() for hatch_id in hatch_id_list])
     hatch_list = Items.ApplyFilter(hatch_filter)
     if not hatch_list:
         error("Error. hatch not found. Finishing.", True)
@@ -106,7 +118,8 @@ def get_fish_qtd():
 
 def check_cut(max_fish=10):
     if get_fish_qtd() >= max_fish or Player.Weight >= Player.MaxWeight - 100:
-        cut()
+        if cut_fish:
+            cut()
         deposit()
 
 
@@ -124,7 +137,7 @@ def check_position():
 def turn_ship(old_dir):
     Player.ChatSay("turn right")
     Misc.Pause(1000)
-    new_dir = fish_info[hatch.ItemID][0]
+    new_dir = fish_info[get_hatch_key()][0]
     if new_dir != old_dir:
         return
     error("something is wrong. Failed to change ship direction.")
@@ -184,6 +197,56 @@ def cut():
                 set_shared('cut_weapon', "Choose a weapon to cut fish into steaks:")
 
 
+def plain_name(item):
+    item_name = item.Name
+    try:
+        if item.Amount > 1:
+            item_name = item_name[item_name.index(" ") + 1:]
+    except Exception:
+        item_name = item.Name
+    return item_name.lower()
+
+
+def get_xy_position(item, move=True):
+    hatch_size = (45, 167)
+    below_fs = int(hatch_size[0] + (hatch_size[1] - hatch_size[0]) * 3 / 8)
+    if item.Hue not in color_list:
+        color_list.append(item.Hue)
+    ids = list([f for f in fish_id_list if f not in [0x09CC, 0x09CD, 0x09CE, 0x09CF]])
+    if item.ItemID not in ids:
+        ids.append(item.ItemID)
+    ids = sorted(ids)
+    idx = ids.index(item.ItemID)
+    if idx >= 2:
+        idx += 1
+    x = (int(hatch_size[0] + (hatch_size[1] - hatch_size[0]) / 4 * int(idx / 3)) +
+         int(((hatch_size[1] - hatch_size[0]) / 4) / 8 * int(sorted(color_list).index(item.Hue) / 3)))
+    y = (int(below_fs + (hatch_size[1] - below_fs) / 3 * (idx % 3)) +
+         int(((hatch_size[1] - below_fs) / 3) / 6 * (sorted(color_list).index(item.Hue) % 3)))
+
+    if item.ItemID == utils['fish_steak']:
+        x = int(hatch_size[0] + (hatch_size[1] - hatch_size[0]) * sorted(color_list).index(item.Hue) / len(color_list))
+        y = 45
+    if item.ItemID == utils['white_pearl']:
+        x = 167
+        y = 167
+    if item.ItemID == utils['delicate scales']:
+        x = 167
+        y = 145
+    if item.ItemID in [0x09CC, 0x09CD, 0x09CE, 0x09CF]:
+        x = 0
+        y = 167
+    for stored_item in hatch.Contains:
+        if (plain_name(stored_item) == plain_name(item) and plain_name(item) != "a big fish" and
+                item.ItemID == stored_item.ItemID and item.Hue == stored_item.Hue):
+            if stored_item.Position.X != x or stored_item.Position.Y != y:
+                if move:
+                    Items.Move(stored_item, hatch, 0, x, y)
+                    Misc.Pause(1000)
+            return -1, -1
+    return x, y
+
+
 def deposit():
     while not Player.IsGhost:
         mess = Items.FindByID(utils['fish_mess'], -1, Player.Backpack.Serial)
@@ -194,16 +257,18 @@ def deposit():
 
     Misc.SendMessage("Depositing fish into hatch", 53)
     Journal.Clear()
-    transfer_list = [(hatch, [utils['fish_steak'], utils['white_pearl'], utils['delicate scales']]),
+    transfer_list = [(hatch, [utils['fish_steak'], utils['white_pearl'], utils['delicate scales']] + fish_id_list),
                      (trash_bag, List[Int32](trash.values()))]
     for container, item_id_list in transfer_list:
         for item_id in item_id_list:
             while not Player.IsGhost:
                 item = Items.FindByID(item_id, -1, Player.Backpack.Serial)
-                if not item or Journal.SearchByType('cannot hold', 'System'):
+                if (not item or Journal.SearchByType('cannot hold', 'System') or
+                        item.Container in [container.Serial, 0]):
                     break
-                Items.Move(item, container, 0)
-                Misc.Pause(600)
+                x, y = get_xy_position(item)
+                Items.Move(item, container, 0, x, y)
+                Misc.Pause(1000)
     Misc.Pause(1000)
     Misc.SendMessage("Restarting to fish", 68)
 
@@ -234,7 +299,7 @@ def get_fishing_spots(position_list):
 def fish(max_attempts=20):
     while not Player.IsGhost:
         for i in range(4):
-            direction, position_list = fish_info[hatch.ItemID]
+            direction, position_list = fish_info[get_hatch_key()]
             for fish_spot in get_fishing_spots(position_list):
                 for _ in range(max_attempts):
                     check_hp()
@@ -251,6 +316,7 @@ def fish(max_attempts=20):
         move_ship()
 
 
+Journal.Clear()
 hatch = get_hatch()
 cut_weapon = get_cut_weapon()
 check_position()

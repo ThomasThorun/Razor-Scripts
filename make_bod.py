@@ -3,6 +3,17 @@ from System.Collections.Generic import List
 from System import Int32
 from AutoComplete import *
 
+# set this two variables below to the Serial of the auxiliary chest / trash_barrel if you want to avoid to set it
+# ingame by answering some questions.
+auxiliary_chest = 0x00000000
+trash_barrel = 0x00000000
+
+# set this two variables below to False if you don't want to use any auxiliary chest / trash barrel
+# (just resources that you have at your Backpack) and don't want to answer any questions about it everytime.
+# if you want to use the containers then True is recommended,
+# even if above serial values are filled - then it will ask only if needed.
+auxiliary_chest_questions = True
+trash_barrel_questions = True
 
 
 class Bod:
@@ -10,12 +21,20 @@ class Bod:
         self.skill = skill
         self.serial = serial
         self.material = ''
+        if self.skill in ["Blacksmithing", "Tinkering"]:
+            self.material = "Iron"
+        if self.skill == "Tailoring":
+            self.material = "Leather/Hides"
+        if self.skill in ["Bowcraft and Fletching", "Carpentry"]:
+            self.material = "Wood"
         self.exceptional = False
         self.type = 'small'
         self.item = {'name': '', 'done_amount': 0}
+        self.made_name = ''
         self.items = []
-        self.total_amount = 0
+        self.total_amount = 20
         self.filled = False
+        self.old_items = []
         self.refresh(True)
 
     def refresh(self, create_list=False):
@@ -29,25 +48,22 @@ class Bod:
                 if "large bulk" in txt_list:
                     self.type = "large"
                     Misc.IgnoreObject(self.serial)
-                if self.skill in ["Blacksmithing", "Tinkering"]:
-                    self.material = "Iron"
+                if self.material == "Iron" and "all items must be made with " in txt_list:
                     for ingot in skill_info[self.skill]['material']:
                         if "all items must be made with " + ingot.lower() + " ingots." in txt_list:
                             self.material = ingot
-                if self.skill == "Tailoring":
-                    self.material = "Leather/Hides"
+                if self.material == "Leather/Hides" and "all items must be made with " in txt_list:
                     for leather in skill_info[self.skill]['material']:
                         if "all items must be made with " + leather.lower().replace("hides", "leather.") in txt_list:
                             self.material = leather
-                if self.skill in ["Bowcraft and Fletching", "Carpentry"]:
-                    self.material = "Wood"
+                if self.material == "Wood":
                     for wood in skill_info[self.skill]['material']:
                         if "|" + wood.lower() + "|" in txt_list:
                             self.material = wood
                 for prop in txt_list.split("|"):
                     if ":" in prop and "weight" not in prop:
                         if "amount to make:" in prop:
-                            self.total_amount = int(prop.split("amount to make:")[1])
+                            self.total_amount = min(self.total_amount, int(prop.split("amount to make:")[1]))
                         else:
                             item_data = prop.split(":")
                             if create_list:
@@ -63,28 +79,121 @@ class Bod:
     def to_make_quantity(self):
         return self.total_amount - self.item['done_amount']
 
+    def open_gump(self):
+        global bod_gump_id
+        if bod_gump_id > 0 and Gumps.WaitForGump(bod_gump_id, 100) > 0:
+            return True
+        for _ in range(5):
+            Items.UseItem(self.serial)
+            new_bod_gump_id = get_gump_num(["A bulk order", "A large bulk order"], 4000)
+            if new_bod_gump_id > 0:
+                bod_gump_id = set_shared_gump("bod_gump_id", new_bod_gump_id)
+                return True
+        return False
+
+    def set_old_items(self):
+        self.old_items = [i.Serial for i in contains(Player.Backpack)]
+
+    def set_made_item_name(self):
+        if not self.made_name:
+            new_item = get_first([i for i in contains(Player.Backpack) if i.Serial not in self.old_items and
+                                  i.Name not in skill_info[self.skill]['tools'].keys()])
+            if new_item:
+                self.made_name = new_item.Name
+
     def use(self):
-        bod_gump_id = 0
-        if self.type == "large":
-            cont_list = get_root_containers_from_id([0x2258], skill_info[self.skill]['bod_color'])
-        else:
-            cont_list = get_root_containers_from_id([self.item['name']])
-        Journal.Clear()
-        for container in cont_list:
-            for i in range(10):
-                Items.UseItem(self.serial)
-                bod_gump_id = get_gump_num(["A bulk order", "A large bulk order"])
+        def get_filling_containers():
+            if self.type == "large":
+                container_list = get_containers_from_id([0x2258], skill_info[self.skill]['bod_color'],
+                                                        None, [self.serial])
+            else:
+                search_list = find_items_list([get_material_prefix(self.material) + self.item['name']],
+                                              Player.Backpack, -1, True, self.exceptional)
+                if self.made_name and not search_list:
+                    search_list = find_items_list([self.made_name],
+                                                  Player.Backpack, -1, True, self.exceptional)
+                container_list = get_containers_from_id([], -1, search_list)
+            return container_list
+
+        fi = False
+        for _ in range(3):
+            filling_containers = get_filling_containers()
+            if not filling_containers:
+                fi = True
+                break
+            for container in filling_containers:
+                self.open_gump()
                 if bod_gump_id > 0 and Gumps.WaitForGump(bod_gump_id, 4000) > 0:
+                    fi = True
                     Gumps.SendAction(bod_gump_id, 4)
                     if Target.WaitForTarget(4000, False) > 0:
                         Target.TargetExecute(container)
+                        Misc.Pause(300)
+                        if Gumps.WaitForGump(bod_gump_id, 4000) > 0:
+                            Target.WaitForTarget(1000, False)
+                            Target.Cancel()
+        if not fi:
+            error("Failed to open " + self.skill + " BOD gump.")
+        Gumps.CloseGump(Gumps.CurrentGump())
+        Misc.Pause(500)
+        Gumps.CloseGump(bod_gump_id)
+        Target.Cancel()
+
+    def get_items_to_fill(self):
+        _, item_data = search_button(skill_info[self.skill]['gump'], self.item['name'])
+        if not item_data['stack']:
+            return False
+        if get_resource([get_material_prefix(self.material) + self.item['name']], -1, 1,
+                        self.to_make_quantity(), item_data['stack']):
+            made_item = get_first(find_items_list([get_material_prefix(self.material) + self.item['name']],
+                                                  Player.Backpack))
+            if made_item:
+                if made_item.Amount <= self.to_make_quantity():
+                    return True
+                else:  # separate stacked items for filling the bod.
+                    throw_items([made_item], Player.Backpack, self.to_make_quantity(), 100, 100)
+                    return True
+        return False
+
+    def get_resources_data(self):
+        common_names = {"Cloth": {'id': ["Cut Cloth", "Cloth", "Bolt Of Cloth"], 'color': 0x0000},
+                        "Yards of Cloth": {'id': ["Cut Cloth", "Cloth", "Bolt Of Cloth"], 'color': 0x0000},
+                        "Blank Maps or Scrolls": {'id': ["Blank Scroll", "Blank Map"], 'color': -1},
+                        "Sea Serpent or Dragon Scales": {'id': ["Sea Serpent Scales", "Dragon Scales"], 'color': -1},
+                        "Water": {'id': ["Endless Decanter of Water", "Glass Pitcher", "A Pitcher Of Water"],
+                                  'color': -1}}
+
+        _, item_data = search_button(skill_info[self.skill]['gump'], self.item['name'])
+        resources_data = []
+
+        for resource in item_data['mats']:
+            resource_data = {}
+            for name_list in material_info:
+                if resource[0] == name_list:
+                    resource_data = material_info[name_list][self.material]
+                    resource_data['name'] = (self.material.replace("Leather/Hides", "").replace(" Hides", "")
+                                             + " " + resource[0])
+                    break
+            if not resource_data:
+                for name in common_names:
+                    if resource[0] == name:
+                        resource_data = common_names[name]
+                        resource_data['name'] = name
                         break
-            Misc.Pause(500)
-            Gumps.CloseGump(Gumps.CurrentGump())
-            Misc.Pause(500)
-            Gumps.CloseGump(bod_gump_id)
-            if bod_gump_id == 0:
-                error("Failed to open " + self.skill + " BOD gump.")
+            if not resource_data:
+                resource_data = {'id': [resource[0]], 'color': -1}
+            resource_data['name'] = resource[0]
+            resource_data['amount'] = resource[1]
+            resource_data['stack'] = item_data['stack']
+            resources_data.append(resource_data)
+        return resources_data
+
+    def get_resources(self, resources_data):
+        grabbing_results = []
+        for resource_data in resources_data:
+            grabbing_results.append(get_resource(resource_data['id'], resource_data['color'], resource_data['amount'],
+                                                 self.to_make_quantity(), resource_data['stack']))
+        return False not in grabbing_results
 
     def start(self):
         Misc.SendMessage("\r\n\r\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
@@ -106,6 +215,25 @@ class Bod:
                                  "\r\n*** Finished ***\r\n\r\n", 68)
             return True
         return False
+
+
+def get_from_storage_chest(item_id, color):
+    storage_refs = {(0x1BF2, 0x0000): ('IronIngot', 100), (0x1BF2, 0x0973): ('DullCopperIngot', 101),
+                    (0x1BF2, 0x0966): ('ShadowIronIngot', 102), (0x1BF2, 0x096D): ('CopperIngot', 103),
+                    (0x1BF2, 0x0972): ('BronzeIngot', 104), (0x1BF2, 0x08A5): ('GoldIngot', 105),
+                    (0x1BF2, 0x0979): ('AgapiteIngot', 106), (0x1BF2, 0x089F): ('VeriteIngot', 107),
+                    (0x1BF2, 0x08AB): ('ValoriteIngot', 108),
+                    (0x1BD7, 0x0000): ('Board', 107), (0x1BD7, 0x07DA): ('OakBoard', 108),
+                    (0x1BD7, 0x04A7): ('AshBoard', 109), (0x1BD7, 0x04A8): ('YewBoard', 110),
+                    (0x1BD7, 0x04A9): ('HeartwoodBoard', 111), (0x1BD7, 0x04AA): ('BloodwoodBoard', 112),
+                    (0x1BD7, 0x047F): ('FrostwoodBoard', 113),
+                    (0x1BDD, 0x0000): ('Log', 100), (0x1BDD, 0x07DA): ('OakLog', 101),
+                    (0x1BDD, 0x04A7): ('AshLog', 102), (0x1BDD, 0x04A8): ('YewLog', 103),
+                    (0x1BDD, 0x04A9): ('HeartwoodLog', 104), (0x1BDD, 0x04AA): ('BloodwoodLog', 105),
+                    (0x1BDD, 0x047F): ('FrostwoodLog', 106),
+                    (0x1081, 0x0000): ('Leather', 100), (0x1081, 0x08AC): ('SpinedLeather', 101),
+                    (0x1081, 0x0845): ('HornedLeather', 102), (0x1081, 0x0851): ('BarbedLeather', 103),
+                    ("Cut Cloth", 0x0000): ('Cloth', 110), ("Bolt Of Cloth", 0x0000): ('BoltOfCloth', 111)}
 
 
 alchemy_gump = {
@@ -2223,7 +2351,7 @@ tinkering_gump = {
              [("Ingots", 3)]},
          "Scorp": {'btn': 42, 'stack': False, 'mats':
              [("Ingots", 2)]},
-         "Tinker'S Tools": {'btn': 62, 'stack': False, 'mats':
+         "Tinker'S Tools (Tool Kit)": {'btn': 62, 'stack': False, 'mats':
              [("Ingots", 2)]},
          "Hatchet": {'btn': 82, 'stack': False, 'mats':
              [("Ingots", 4)]},
@@ -2482,29 +2610,29 @@ tinkering_gump = {
              [("Ingots", 3), ("Ring of the Elements", 1), ("Blood of the Dark Father", 5), ("White Pearl", 4)]}}}
 
 material_info = {
-    'Ingots': {
-        'Iron': {'btn': 6, 'id': 0x1BF2, 'color': 0x0000},
-        'Dull Copper': {'btn': 26, 'id': 0x1BF2, 'color': 0x0973},
-        'Shadow Iron': {'btn': 46, 'id': 0x1BF2, 'color': 0x0966},
-        'Copper': {'btn': 66, 'id': 0x1BF2, 'color': 0x096D},
-        'Bronze': {'btn': 86, 'id': 0x1BF2, 'color': 0x0972},
-        'Gold': {'btn': 106, 'id': 0x1BF2, 'color': 0x08A5},
-        'Agapite': {'btn': 126, 'id': 0x1BF2, 'color': 0x0979},
-        'Verite': {'btn': 146, 'id': 0x1BF2, 'color': 0x089F},
-        'Valorite': {'btn': 166, 'id': 0x1BF2, 'color': 0x08AB}},
-    'Boards': {
-        'Wood': {'btn': 6, 'id': 0x1BD7, 'color': 0x0000},
-        'Oak': {'btn': 26, 'id': 0x1BD7, 'color': 0x07DA},
-        'Ash': {'btn': 46, 'id': 0x1BD7, 'color': 0x04A7},
-        'Yew': {'btn': 66, 'id': 0x1BD7, 'color': 0x04A8},
-        'Heartwood': {'btn': 86, 'id': 0x1BD7, 'color': 0x04A9},
-        'Bloodwood': {'btn': 106, 'id': 0x1BD7, 'color': 0x04AA},
-        'Frostwood': {'btn': 126, 'id': 0x1BD7, 'color': 0x047F}},
-    'Leather': {
-        'Leather/Hides': {'btn': 6, 'id': 0x1081, 'color': 0x0000},
-        'Spined Hides': {'btn': 26, 'id': 0x1081, 'color': 0x08AC},
-        'Horned Hides': {'btn': 46, 'id': 0x1081, 'color': 0x0845},
-        'Barbed Hides': {'btn': 66, 'id': 0x1081, 'color': 0x0851}}}
+    "Ingots": {
+        'Iron': {'btn': 6, 'id': [0x1BF2], 'color': 0x0000},
+        'Dull Copper': {'btn': 26, 'id': [0x1BF2], 'color': 0x0973},
+        'Shadow Iron': {'btn': 46, 'id': [0x1BF2], 'color': 0x0966},
+        'Copper': {'btn': 66, 'id': [0x1BF2], 'color': 0x096D},
+        'Bronze': {'btn': 86, 'id': [0x1BF2], 'color': 0x0972},
+        'Gold': {'btn': 106, 'id': [0x1BF2], 'color': 0x08A5},
+        'Agapite': {'btn': 126, 'id': [0x1BF2], 'color': 0x0979},
+        'Verite': {'btn': 146, 'id': [0x1BF2], 'color': 0x089F},
+        'Valorite': {'btn': 166, 'id': [0x1BF2], 'color': 0x08AB}},
+    "Boards or Logs": {
+        'Wood': {'btn': 6, 'id': [0x1BD7, 0x1BDD], 'color': 0x0000},
+        'Oak': {'btn': 26, 'id': [0x1BD7, 0x1BDD], 'color': 0x07DA},
+        'Ash': {'btn': 46, 'id': [0x1BD7, 0x1BDD], 'color': 0x04A7},
+        'Yew': {'btn': 66, 'id': [0x1BD7, 0x1BDD], 'color': 0x04A8},
+        'Heartwood': {'btn': 86, 'id': [0x1BD7, 0x1BDD], 'color': 0x04A9},
+        'Bloodwood': {'btn': 106, 'id': [0x1BD7, 0x1BDD], 'color': 0x04AA},
+        'Frostwood': {'btn': 126, 'id': [0x1BD7, 0x1BDD], 'color': 0x047F}},
+    "Leather or Hides": {
+        'Leather/Hides': {'btn': 6, 'id': [0x1081, 0x1079], 'color': 0x0000},
+        'Spined Hides': {'btn': 26, 'id': [0x1081, 0x1079], 'color': 0x08AC},
+        'Horned Hides': {'btn': 46, 'id': [0x1081, 0x1079], 'color': 0x0845},
+        'Barbed Hides': {'btn': 66, 'id': [0x1081, 0x1079], 'color': 0x0851}}}
 
 skill_info = {
     "Alchemy": {
@@ -2512,12 +2640,12 @@ skill_info = {
             {'mortar and pestle': 0x0E9B}},
     "Blacksmithing": {
         'gump': blacksmithing_gump, 'material': material_info['Ingots'], 'bod_color': 0x044E, 'tools':
-            {'smith hammer': 0x13E3, 'sledge hammer': 0x0FB5, 'tongs': 0x0FBB}},
+            {"smith's hammer": 0x13E3, 'sledge hammer': 0x0FB5, 'tongs': 0x0FBB}},
     "Bowcraft and Fletching": {
         'gump': bowcraft_gump, 'bod_color': 0x0591, 'tools':
-            {'fletcher tools': 0x1022}},
+            {"fletcher's tools": 0x1022}},
     "Carpentry": {
-        'gump': carpentry_gump, 'material': material_info['Boards'], 'bod_color': 0x05E8, 'tools':
+        'gump': carpentry_gump, 'material': material_info['Boards or Logs'], 'bod_color': 0x05E8, 'tools':
             {'saw': 0x1034, 'draw_knife': 0x10E4, 'froe': 0x10E5, 'inshave': 0x10E6, 'scorp': 0x10E7,
              'dovetail_saw': 0x1028, 'hammer': 0x102A}},
     "Cartography": {
@@ -2530,11 +2658,17 @@ skill_info = {
         'gump': inscription_gump, 'bod_color': 0x0A26, 'tools':
             {"scribe's pen": 0x0FBF}},
     "Tailoring": {
-        'gump': tailoring_gump, 'material': material_info['Leather'], 'bod_color': 0x0483, 'tools':
+        'gump': tailoring_gump, 'material': material_info['Leather or Hides'], 'bod_color': 0x0483, 'tools':
             {'sewing kit': 0x0F9D}},
     "Tinkering": {
         'gump': tinkering_gump, 'material': material_info['Ingots'], 'bod_color': 0x0455, 'tools':
-            {'tinker tools': 0x1EBC, 'tool kit': 0x1EB8}}}
+            {"tinker's tools": 0x1EBC, 'tool kit': 0x1EB8}}}
+
+
+def check_save():
+    if Journal.Search("The world is saving, please wait."):
+        Misc.Pause(3000)
+        Journal.Clear()
 
 
 def get_first(item_list):
@@ -2545,7 +2679,6 @@ def get_first(item_list):
 
 def dist(pos1, pos2=Player):
     pos = [pos1, pos2]
-
     for i, _ in enumerate(pos):
         if type(pos[i]) is not dict:
             try:
@@ -2569,47 +2702,100 @@ def dist(pos1, pos2=Player):
         if pos[0]['Map'] != pos[1]['Map']:
             return 10000
     except Exception:
-        pos[0]['Map'] = pos[1]['Map'] = Player.Map
+        pass
     return max(abs(pos[0]['X'] - pos[1]['X']), abs(pos[0]['Y'] - pos[1]['Y']))
 
 
-def find_items_list(item_id_list, container, color=-1, recursive=True):
+def name_mats_compare(mat_name, item):
+    if type(mat_name) is not str:
+        return False
+    try:
+        idx = item.Name.index(" ") + 1
+    except Exception:
+        idx = 0
+    alt_name = item.Name[idx:].lower()
+    return mat_name.lower() in [item.Name.lower(), alt_name, item.Name.lower() + "s", alt_name + "s"]
+
+
+def document_chest(container):
+    if type(container) is int:
+        container = Items.FindBySerial(container)
+    if container.Serial == auxiliary_chest.Serial:
+        check_save()
+        Items.UseItem(container)
+        Misc.Pause(1500)
+    for item in container.Contains:
+        if item.IsContainer:
+            while not item.Contains:
+                Journal.Clear()
+                check_save()
+                Items.UseItem(item)
+                Misc.Pause(1000)
+                check_save()
+                Items.Close(item)
+                if not Journal.Search("You must wait to perform another action."):
+                    break
+            document_chest(item)
+
+
+def contains(container, color=-1, recursive=True, exceptional=False):
+    found_items = []
+    for item in container.Contains:
+        if (exceptional and "exceptional" in str(item.Properties).lower()) or not exceptional:
+            if color >= 0:
+                if int(color) == int(item.Hue):
+                    found_items.append(item)
+            else:
+                found_items.append(item)
+        if item.IsContainer:
+            found_items.extend(contains(item, color, recursive, exceptional))
+    return found_items
+
+
+def find_items_list(item_id_list, container, color=-1, recursive=True, exceptional=False):
     found_items = []
     try:
         _ = container.Serial
     except Exception:
         container = Items.FindBySerial(container)
-    try:
-        for item_id in item_id_list:
-            while True:
-                item = Items.FindByID(item_id, color, container.Serial, recursive, True)
-                if not item:
-                    break
-                found_items.append(item)
-                Misc.IgnoreObject(item)
-    except Exception:
-        for item_name in item_id_list:
-            for item in container.Contains:
-                if item.Name.lower() == item_name.lower():
-                    if color > 0:
-                        if int(color) == int(item.Hue):
-                            found_items.append(item)
-                            Misc.IgnoreObject(item)
-                    else:
+    for item_id in item_id_list:
+        for item in container.Contains:
+            if (item_id == item.ItemID or name_mats_compare(item_id, item) and
+                    ((exceptional and "exceptional" in str(item.Properties).lower()) or not exceptional)):
+                if color >= 0:
+                    if int(color) == int(item.Hue):
                         found_items.append(item)
-                        Misc.IgnoreObject(item)
-                if item.IsContainer and recursive:
-                    found_items.extend(find_items_list(item_id_list, item, color, True))
-    Misc.ClearIgnore()
+                else:
+                    found_items.append(item)
+            if item.IsContainer and recursive:
+                found_items.extend(find_items_list(item_id_list, item, color, True, exceptional))
     return found_items
 
 
-def get_root_containers_from_id(item_id_list, color=-1):
-    found_containers = []
-    for item in find_items_list(item_id_list, Player.Backpack, color, True):
-        if dot_container(item) not in found_containers:
-            found_containers.append(dot_container(item))
-    return found_containers
+def get_root_container(item):
+    if type(item) is int:
+        item = Items.FindBySerial(item)
+    if not item:
+        return Player.Backpack.Serial
+    if dot_container(item) > 0:
+        item = Items.FindBySerial(dot_container(item))
+        return get_root_container(item)
+    return item.Serial
+
+
+def get_containers_from_id(item_id_list, color=-1, item_list=None, exc_serials=None):
+    if type(exc_serials) is None:
+        exc_serials = []
+    found_countainers_serial = []
+    if item_list:
+        search_list = item_list
+    else:
+        search_list = [i for i in find_items_list(item_id_list, Player.Backpack, color, True)
+                       if i.Serial not in exc_serials]
+    for item in search_list:
+        if dot_container(item) > 0 and dot_container(item) not in found_countainers_serial:
+            found_countainers_serial.append(dot_container(item))
+    return [Items.FindBySerial(container_serial) for container_serial in found_countainers_serial]
 
 
 def get_items_by_filter(item_id_list=None, name=None, radius=2, ground=False, only_containers=False):
@@ -2645,13 +2831,14 @@ def get_items_by_filter(item_id_list=None, name=None, radius=2, ground=False, on
     return selected_list
 
 
-def dot_container(search_item):
-    ground_containers = get_items_by_filter(None, None, 2, True, True)
-    for container in [Player.Backpack] + ground_containers:
-        cont = in_container(search_item, container, True)
-        if cont:
-            return cont
-    return None
+def dot_container(item):
+    if type(item) is int:
+        item = Items.FindBySerial(item)
+    else:
+        item = Items.FindBySerial(item.Serial)
+    if item:
+        return item.Container
+    return 0
 
 
 def in_container(item, container, recursive=False):
@@ -2665,7 +2852,7 @@ def in_container(item, container, recursive=False):
     return None
 
 
-def throw_items(item_list, container):
+def throw_items(item_list, container, amount=0, x=-1, y=-1, wait=1000):
     try:
         c = container.Serial
     except Exception:
@@ -2675,11 +2862,12 @@ def throw_items(item_list, container):
             c = item.Serial
         except Exception:
             item = Items.FindBySerial(item)
-        while True:
-            if in_container(item, container):
+        while not Player.IsGhost:
+            item = Items.FindBySerial(item.Serial)
+            if not item or dot_container(item) in [container.Serial, 0]:
                 break
-            Items.Move(item, container, 0)
-            Misc.Pause(2000)
+            Items.Move(item, container, amount, x, y)
+            Misc.Pause(wait)
 
 
 def get_shared_item(name):
@@ -2704,14 +2892,14 @@ def set_shared_gump(name, gump_num):
     return gump_num
 
 
-def get_and_set_shared_container(name, var_name):
+def get_and_set_shared_container(var_name, msg):
     container = get_shared_item(var_name)
-    while not container or not container.IsContainer or container == Player.Backpack:
-        container = set_shared_item(var_name, "Target " + name +
-                                    ".\r\n (Or ESC to craft items without one.)")
-        if not container or container.IsContainer:
+    while (not container or not container.IsContainer or
+           container.Serial == Player.Backpack.Serial or dist(container) > 2):
+        container = set_shared_item(var_name, msg)
+        if not container or (container.IsContainer and dist(container) <= 2):
             break
-        error("Is that a container?")
+        error("Is that a container?\r\nIs that not too far away?\r\n(2 tiles maximum radius).")
     return container
 
 
@@ -2733,18 +2921,60 @@ def error(text, skill='', item_name='', finish=True):
     msg = msg + "\r\n" + text + "\r\n"
     if finish:
         msg = msg + "FINISHING." + "\r\n\r\n"
-    Misc.SendMessage(msg, 28)
+    Misc.SendMessage(msg, 38)
     if finish:
         sys.exit()
 
 
-def get_containers():
-    global trash_barrel
-    for skill in skill_info:
-        if Items.FindByID(0x2258, skill_info[skill]['bod_color'], Player.Backpack.Serial, False, True):
-            if skill not in ["Blacksmithing", "Tailoring", "Tinkering"]:
-                trash_barrel = get_and_set_shared_container("a trash barrel", "trash_barrel")
-                break
+def get_workable_container(chest_serial, chest_name):
+    chest = Items.FindBySerial(chest_serial)
+    if not chest or dist(chest) > 2:
+        if chest:
+            Misc.SendMessage("\r\n!!! You are too far away from the " + chest_name.replace("_", " ") +
+                             " you set on top of the code !!!\r\n", 68)
+        chest = get_shared_item(chest_name)
+        if not chest or dist(chest) > 2:
+            return None
+    return chest
+
+
+def out_of_resources(name):
+    global auxiliary_chest
+    aux = auxiliary_chest
+    if auxiliary_chest_questions:
+        auxiliary_chest = get_and_set_shared_container("auxiliary_chest",
+                                                       "Can't find " + name + ", please select the container where"
+                                                       + " the " + name + " are (Or ESC to skip this bod.)"
+                                                       + "\r\n")
+        if auxiliary_chest and auxiliary_chest == aux:
+            return True
+        if auxiliary_chest:
+            document_chest(auxiliary_chest)
+            return False
+    auxiliary_chest = aux
+    return True
+
+
+def set_macro_containers():
+    global trash_barrel, auxiliary_chest
+    auxiliary_chest = get_workable_container(auxiliary_chest, "auxiliary_chest")
+    trash_barrel = get_workable_container(trash_barrel, "trash_barrel")
+    if (not auxiliary_chest) and auxiliary_chest_questions:
+        auxiliary_chest = get_and_set_shared_container("auxiliary_chest",
+                                                       "Target an auxiliary container, if you want to grab resources "
+                                                       + "from it.\r\n(Hit ESC to use only backpack resources).")
+    if (not trash_barrel) and trash_barrel_questions:
+        for skill in skill_info:
+            if Items.FindByID(0x2258, skill_info[skill]['bod_color'], Player.Backpack.Serial, False, True):
+                if skill in ["Bowcraft and Fletching", "Carpentry"]:
+                    trash_barrel = get_and_set_shared_container("trash_barrel", "Target a trash container. \r\n" +
+                                                                "(Hit ESC to trash no items).\r\n Target some bag " +
+                                                                "if you just want to organize the leftovers there.")
+                    break
+    if auxiliary_chest:
+        Misc.SendMessage("\r\n!!! Please Wait !!!\r\n...Acknowledging container...\r\n", 78)
+        document_chest(auxiliary_chest)
+        Misc.SendMessage("\r\n...Finished...\r\n", 78)
 
 
 def search_button(gump, item_name):
@@ -2771,34 +3001,40 @@ def meditate():
             Misc.Pause(1000)
 
 
-def check_craft_messages():
-    msg_list = [("You failed ", 40), ("You create an exceptional", 68), ("You create the", 48),
-                ("You do not have ", 28), ("You must be near ", 28)]
-    for msg in msg_list:
-        for line in Gumps.LastGumpGetLineList():
-            if msg[0] in line:
-                if msg[1] != 28:
-                    Misc.SendMessage(line, msg[1])
-                return line
-    return ''
-
-
 def wait_craft_gump(gump_num, timeout):
+    gump_open = False
     for _ in range(int(timeout / 100)):
         if Journal.Search("You have worn out"):
+            msg = "worn"
+            if Journal.Search("You create "):
+                msg = msg + " create"
+            if Journal.Search("You create an exceptional"):
+                msg = msg + " exceptional"
             Journal.Clear()
-            return "worn"
+            return msg
         if Journal.Search("You must wait to perform another action."):
             Misc.Pause(2000)
             Journal.Clear()
             return "wait"
         if Gumps.WaitForGump(gump_num, 100) > 0:
-            return "success"
-    return "timeout"
+            gump_open = True
+            break
+    if gump_open:
+        msg_list = [("You failed ", 40), ("You create an exceptional", 68), ("You create the", 90),
+                    ("You do not have ", 28), ("You don't have ", 28), ("You must be near ", 28)]
+        for msg in msg_list:
+            for line in Gumps.LastGumpGetLineList():
+                if msg[0] in line:
+                    if msg[1] != 28:
+                        Misc.SendMessage(line, msg[1])
+                    return line
+        return ""
+    else:
+        return "timeout"
 
 
-def get_gump_num(text_list):
-    for _ in range(100):
+def get_gump_num(text_list, timeout=10000):
+    for _ in range(int(timeout / 100)):
         for text in text_list:
             if Gumps.LastGumpTextExist(text):
                 return Gumps.CurrentGump()
@@ -2810,65 +3046,195 @@ def get_gump_num(text_list):
     return 0
 
 
-def get_bod_resources(bod):
-    _, item_data = search_button(skill_info[bod.skill]['gump'], bod.item['name'])
-    fetch_resource_results = []
-    common_names = {["Ingot", "Ingots"]: "Ingots"}
-    for resource in item_data['mats']:
-        for name_list in common_names:
-            if resource[0] in name_list:
-                resource_data = material_info[common_names[name_list]][bod.material]
-                get_resource(resource_data['id'], resource[1] * bod.to_make_quantity(), resource_data['color'])
+def get_scissors():
+    scissors = get_first(find_items_list([0x0F9F], Player.Backpack))
+    if not scissors and auxiliary_chest:
+        scissors = get_first(find_items_list([0x0F9F], auxiliary_chest))
+        if scissors:
+            refresh_to_return(scissors)
+            throw_items([scissors], Player.Backpack, 0)
+            Misc.Pause(500)
+    return scissors
 
 
-def get_resource(resource_id_list, amount=1, color=-1):
-    for resource_id in resource_id_list:
-        amount_found = 0
-        container_list = [Player.Backpack.Serial]
-        container_list.extend([item.Serial for item
-                               in get_items_by_filter(None, None, 2, True, True)])
-        for _ in range(10):
-            for container in container_list:
-                try:
-                    resource = Items.FindByID(resource_id, color, container, False, True)
-                except TypeError:
-                    resource = Items.FindByName(resource_id, color, container, -1, True)
-                    if not resource:
-                        resource = Items.FindByName(resource_id.rstrip(resource_id[-1]), color, container,
-                                                    -1, True)
-                if resource:
-                    if container != Player.Backpack.Serial:
-                        Items.Move(resource, Player.Backpack, amount - amount_found)
-                        Misc.Pause(600)
-                    else:
-                        amount_found = resource.Amount
-                        if amount_found >= amount:
-                            break
-            if amount_found >= amount:
+def cut(item):
+    scissors = get_scissors()
+    if scissors:
+        Items.UseItem(scissors)
+        Target.WaitForTarget(5000, False)
+        Target.TargetExecute(item)
+        Misc.Pause(600)
+        return True
+    return False
+
+
+def check_more_actions(resource_id):
+    if resource_id == "Glass Pitcher":
+        empty_pitcher = Items.FindByID(0x0FF6, 0x0000, Player.Backpack.Serial, -1, True)
+        water_trough = get_first(get_items_by_filter([0x0B41, 0x0B42, 0x0B43, 0x0B44]))
+        if not water_trough:
+            Misc.SendMessage("\r\nYou have to be near a Water Through to fill the glass of water.\r\n")
+            return False
+        if empty_pitcher:
+            Items.UseItem(empty_pitcher)
+            if Target.WaitForTarget(4000, False) > 0:
+                Target.TargetExecute(water_trough)
+                Misc.Pause(600)
                 return True
-        return False
+    if resource_id == "Bolt Of Cloth":
+        bolt = get_first(find_items_list(["Bolt Of Cloth"], Player.Backpack))
+        if bolt and cut(bolt):
+            return True
+    return False
+
+
+def get_resource(resource_id_list, color=-1, resource_needed=1, to_make_amount=1, stack=False):
+    global cont_xy
+    total_amount_found = 0
+    for resource_id in resource_id_list:
+        amount_found = grabbed = to_grab = 0
+        name = 'resources'
+        container_list = [Player.Backpack]
+        if auxiliary_chest:
+            container_list.append(auxiliary_chest)
+        for _ in range(5):
+            for container in container_list:
+                resource_list = find_items_list([resource_id], container, color, True)
+                if resource_list:
+                    if container.Serial != Player.Backpack.Serial:
+                        for resource in resource_list:
+                            if resource.Container > 0:
+                                if amount_found == grabbed == 0:
+                                    name = 'resources'
+                                    cont_xy['resources']['y'] = (cont_xy['resources']['y'] + 10) % 160 + 40
+                                else:
+                                    name = 'stack'
+                            if resource_id == "Bolt Of Cloth":
+                                if get_scissors():
+                                    to_grab = get_quantity_to_grab(resource,
+                                                                   int(resource_needed * to_make_amount / 50) + 1,
+                                                                   1, amount_found + grabbed, stack)
+                                else:
+                                    continue
+                            else:
+                                to_grab = get_quantity_to_grab(resource, resource_needed, to_make_amount,
+                                                               amount_found + grabbed, stack)
+                            if to_grab > 0:
+                                refresh_to_return(resource)
+                                throw_items([resource], Player.Backpack, to_grab,
+                                            cont_xy[name]['x'], cont_xy[name]['y'])
+                                grabbed += min(to_grab, resource.Amount)
+                                to_grab -= grabbed
+                            if to_grab <= 0:
+                                break
+                        if to_grab <= 0:
+                            break
+                    else:
+                        if check_more_actions(resource_id):
+                            return True
+                        amount_found = 0
+                        for resource in resource_list:
+                            amount_found += resource.Amount
+                            if get_quantity_to_grab(resource,
+                                                    resource_needed, to_make_amount, amount_found, stack) <= 0:
+                                return True
+        total_amount_found += amount_found
+    return total_amount_found >= resource_needed
+
+
+def get_quantity_to_grab(resource, resource_needed=1, to_make_amount=1, amount_found=0, stack=False):
+    weight_available = (Player.MaxWeight - 70) - Player.Weight
+    weight_per_piece = resource.Weight / resource.Amount
+    if stack:
+        mult = 1
+    else:
+        mult = 1.5
+    return min(int(weight_available / weight_per_piece), int(mult * resource_needed * to_make_amount)) - amount_found
+
+
+def check_more_includes(resource):
+    global to_return
+    if resource.ItemID == 0x1F9D and resource.Hue == 0x0000:
+        to_return.append({'id': 0x0FF6, 'color': 0x0000, 'container': resource.Container,
+                          'x': resource.Position.X, 'y': resource.Position.X, 'serial': resource.Serial, 'tool': False})
+    if resource.ItemID == 0x0FF6 and resource.Hue == 0x0000:
+        to_return.append({'id': 0x1F9D, 'color': 0x0000, 'container': resource.Container,
+                          'x': resource.Position.X, 'y': resource.Position.X, 'serial': resource.Serial, 'tool': False})
+
+
+def refresh_to_return(resource, tool=False):
+    global to_return
+    for item in to_return:
+        if item['id'] == resource.ItemID and item['color'] == resource.Hue:
+            return False
+    to_return.append({'id': resource.ItemID, 'color': resource.Hue, 'container': resource.Container,
+                      'x': resource.Position.X, 'y': resource.Position.Y, 'serial': resource.Serial, 'tool': tool})
+    check_more_includes(resource)
+    return True
+
+
+def return_items(exclude_bod=None):
+    global to_return
+    new_to_return = []
+    items_in_use = []
+
+    if exclude_bod:
+        tool_cod_list = skill_info[exclude_bod.skill]['tools'].values()
+        if exclude_bod.skill in ["Cartography", "Inscription"]:
+            tool_cod_list = skill_info[exclude_bod.skill]['tools'].keys()
+        items_in_use.extend(find_items_list(tool_cod_list, Player.Backpack, -1, True))
+        for resource_data in exclude_bod.get_resources_data():
+            items_in_use.extend(find_items_list(resource_data['id'], Player.Backpack, resource_data['color'], True))
+
+    for item_data in to_return:
+        item = Items.FindByID(item_data['id'], item_data['color'], Player.Backpack.Serial, True, True)
+        if not item:
+            continue
+        if exclude_bod:
+            if [True for i in items_in_use if i.Serial == item.Serial]:
+                new_to_return.append(item_data)
+                continue
+        if (not item_data['tool'] and
+                Items.FindByID(item_data['id'], item_data['color'], item_data['container'], True, True)):
+            throw_items([item], item_data['container'])
+        else:
+            throw_items([item], item_data['container'], -1, item_data['x'], item_data['y'])
+    to_return = new_to_return
 
 
 def trash(item_id_list, color=-1, recursive=True):
     if item_id_list:
-        if trash_barrel and get_items_by_filter([trash_barrel]):
+        if trash_barrel and dist(trash_barrel) <= 2:
             Misc.SendMessage("Throwing items away.")
             throw_items(find_items_list(item_id_list, Player.Backpack, color, recursive), trash_barrel)
         return True
     return False
 
 
-def recycle(skill, item_name):
+def get_material_prefix(item_material):
+    if item_material in ["", "Iron", "Leather/Hides", "Wood"]:
+        return ""
+    return item_material.replace(" Hides", "").replace("Gold", "Golden") + " "
+
+
+def recycle(skill, item_name, item_material):
     def to_recycle():
-        return [i.Serial for i in find_items_list([item_name], Player.Backpack)
+        return [i.Serial for i in
+                find_items_list([get_material_prefix(item_material) + item_name], Player.Backpack)
                 if "exceptional" not in str(i.Properties).lower()]
+
     if not to_recycle():
         return False
-    tool = get_tool("Blacksmithing")
-    tool_container = dot_container(tool)
+
+    bs_tool = get_tool("Blacksmithing", False)
+    forge = get_first(get_items_by_filter([0x00A9, 0x0FB1, 0x1986, 0x19A2, 0x197A,
+                                           0x197E, 0x198A, 0x199E, 0x1992, 0x1996]))
+    tool_container = 0
+    if bs_tool:
+        tool_container = Items.FindBySerial(dot_container(bs_tool))
     salvage_bag = get_first(find_items_list(["Salvage Bag"], Player.Backpack))
-    if salvage_bag and skill in ["Blacksmithing", "Tailoring"]:
-        throw_items([tool.Serial], Player.Backpack)
+    if bs_tool and forge and salvage_bag and skill in ["Blacksmithing", "Tailoring"]:
+        throw_items([bs_tool.Serial], Player.Backpack, -1, cont_xy['tools']['x'], cont_xy['tools']['y'])
         Misc.SendMessage("\r\nSalvaging remaining pieces\r\n", 78)
         throw_items(to_recycle(), salvage_bag)
         Misc.WaitForContext(salvage_bag.Serial, 10000)
@@ -2877,61 +3243,86 @@ def recycle(skill, item_name):
         else:
             Misc.ContextReply(salvage_bag.Serial, 1)
         Misc.Pause(1000)
-    scissors = get_first(find_items_list([0x0F9F], Player.Backpack))
-    if to_recycle() and ((tool and skill == "Blacksmithing") or (scissors and skill == "Tailoring")):
+    if bs_tool:
+        throw_items([bs_tool], tool_container, -1, cont_xy['tools']['x'], cont_xy['tools']['y'])
+    bs_tool = get_tool("Blacksmithing")
+    if to_recycle() and ((bs_tool and skill == "Blacksmithing") or (get_scissors() and skill == "Tailoring")):
         Misc.SendMessage("\r\nRecycling remaining pieces\r\n", 78)
-        while True:
+        for _ in range(5):
             if not to_recycle():
                 break
             for item in to_recycle():
-                if tool and skill == "Blacksmithing":
-                    if Gumps.WaitForGump(crafting_gump_id, 100) > 0:
-                        Gumps.SendAction(crafting_gump_id, ('Smelt Item', 27)[1])
-                        Target.WaitForTarget(5000, False)
-                        Target.TargetExecute(item)
-                        Gumps.WaitForGump(crafting_gump_id, 8000)
-                    else:
-                        Items.UseItem(tool)
-                        Gumps.WaitForGump(crafting_gump_id, 8000)
+                if bs_tool and skill == "Blacksmithing":
+                    if open_craft_gump(skill):
+                        if Gumps.WaitForGump(crafting_gump_id, 100) > 0:
+                            answer_craft_gump(('Smelt Item', 27)[1])
+                            Target.WaitForTarget(5000, False)
+                            Target.TargetExecute(item)
+                            Gumps.WaitForGump(crafting_gump_id, 8000)
                 else:
-                    Items.UseItem(scissors)
-                    Target.WaitForTarget(5000, False)
-                    Target.TargetExecute(item)
-                    Misc.Pause(600)
+                    cut(item)
             Gumps.CloseGump(crafting_gump_id)
-    throw_items([tool], tool_container)
-    return trash(to_recycle())
+    trash(to_recycle())
 
 
-def get_tool(skill):
-    global to_container
+def get_ground_tool(skill):
+    names = {"Alchemy": "Alchemy Station",
+             "Blacksmithing": "Smithing Press",
+             "Carpentry": "Spinning Lathe",
+             "Cooking": "BBQ Smoker",
+             "Tailoring": "Sewing Machine",
+             "Tinkering": "Tinker Bench",
+             "Inscription": "Writing Desk",
+             "Masonry": "Sculpture",
+             "Glassblowing": "Kiln"}
+    tool = get_first(get_items_by_filter(None, names[skill]))
+    if tool:
+        props = Items.GetPropStringByIndex(tool.Serial, 1).lower()
+        if "uses remaining: " in props:
+            if int(props.split("uses remaining: ")[1]) > 0:
+                return tool
+    return None
+
+
+def get_tool(skill, look_on_ground=True):
+    global to_container, cont_xy
     container_list = []
+    for i in [Player.GetItemOnLayer('RightHand'), Player.GetItemOnLayer('LeftHand')]:
+        if i and i.Name in skill_info[skill]['tools'].keys():
+            return i
+    if look_on_ground:
+        tool = get_ground_tool(skill)
+        if tool:
+            return tool
     salvage_bag = get_first(find_items_list(["Salvage Bag"], Player.Backpack))
-    tool_cod_list = skill_info[skill]['tools'].values()
-    if skill in ["Cartography", "Inscription"]:
-        tool_cod_list = skill_info[skill]['tools'].keys()
+    tool_cod_list = skill_info[skill]['tools'].keys()
     if salvage_bag and skill in ["Blacksmithing", "Tailoring", "Tinkering"]:
         container_list.append(salvage_bag.Serial)
         to_container = salvage_bag.Serial
     container_list.append(Player.Backpack.Serial)
-    container_list.extend([item.Serial for item
-                           in get_items_by_filter(None, None, 2, True, True)])
-    for _ in range(10):
+    if auxiliary_chest:
+        container_list.append(auxiliary_chest.Serial)
+    for _ in range(3):
         for i, container in enumerate(container_list):
             tool_list = find_items_list(tool_cod_list, container, -1, True)
             if tool_list:
                 if i > 0:
-                    Items.Move(get_first(tool_list), to_container, 1)
-                    Misc.Pause(600)
+                    cont_xy['tools']['y'] = (cont_xy['tools']['y'] + 10) % 160 + 40
+                    refresh_to_return(get_first(tool_list), True)
+                    throw_items([get_first(tool_list)], to_container, 1,
+                                cont_xy['tools']['x'], cont_xy['tools']['y'])
+                    break
                 else:
                     tool = get_first(tool_list)
-                    to_container = dot_container(tool)
+                    to_container = Items.FindBySerial(dot_container(tool))
                     return tool
     return None
 
 
 def open_craft_gump(skill):
     global crafting_gump_id
+    if crafting_gump_id > 0 and Gumps.WaitForGump(crafting_gump_id, 100) > 0:
+        return True
     Journal.Clear()
     tool = get_tool(skill)
     if tool:
@@ -2944,52 +3335,57 @@ def open_craft_gump(skill):
     return False
 
 
-def answer_craft_gump(menu_button, item_button):
+def answer_craft_gump(menu_button, item_button=None):
     if crafting_gump_id > 0 and Gumps.WaitForGump(crafting_gump_id, 100) > 0:
         Gumps.SendAction(crafting_gump_id, menu_button)
-        Gumps.WaitForGump(crafting_gump_id, 4000)
-        Gumps.SendAction(crafting_gump_id, item_button)
+        if item_button:
+            Gumps.WaitForGump(crafting_gump_id, 4000)
+            Gumps.SendAction(crafting_gump_id, item_button)
         return True
     return False
 
 
 def make_one_item(skill, menu_button, item_button):
-    for _ in range(2):
+    if open_craft_gump(skill):
         if answer_craft_gump(menu_button, item_button):
-            result = wait_craft_gump(crafting_gump_id, 8000)
-            if result == "success":
-                return check_craft_messages()
-            else:
-                return result
-        elif not open_craft_gump(skill):
-            return "OUT OF TOOLS."
+            return wait_craft_gump(crafting_gump_id, 8000)
+    else:
+        return "OUT OF TOOLS."
     return "timeout"
 
 
-def make_item(item_name, skill, quantity=1, exceptional=False):
+def make_bod_items(bod):
+    def get_made_count(last):
+        count = len(find_items_list([get_material_prefix(bod.material) + bod.item['name']],
+                                    Player.Backpack, -1, True, bod.exceptional))
+        if count == 0:
+            count = len(find_items_list([bod.made_name], Player.Backpack, -1, True, bod.exceptional))
+        return count + last
     global crafting_gump_id
-    menu_button, item_data = search_button(skill_info[skill]['gump'], item_name)
+    menu_button, item_data = search_button(skill_info[bod.skill]['gump'], bod.item['name'])
+    bod.set_old_items()
+    last_made = total_made = 0
     while not Player.IsGhost:
+        bod.refresh()
         if Player.Weight >= Player.MaxWeight - 50:
-            return ''
-        if quantity <= 0:
+            Misc.SendMessage("Dealing with overweight.", 78)
+            return 'overweight'
+        bod.set_made_item_name()
+        if max(total_made, get_made_count(last_made)) >= bod.to_make_quantity():
             Gumps.CloseGump(crafting_gump_id)
             return ''
-        if skill == "INSCRIPTION" and Player.Mana <= 40:
+        if bod.skill == "INSCRIPTION" and Player.Mana <= 40:
             meditate()
-        craft_result = make_one_item(skill, menu_button, item_data['btn'])
-        if "You must be near " in craft_result or "You do not have " in craft_result:
+        craft_result = make_one_item(bod.skill, menu_button, item_data['btn'])
+        if [i for i in ["You must be near ", "You do not have ", "You don't have ", "OUT OF TOOLS."] if
+            i in craft_result]:
             Gumps.CloseGump(crafting_gump_id)
             return craft_result
-        if "create" in craft_result:
-            if exceptional:
-                if "exceptional" in craft_result:
-                    quantity -= 1
-            else:
-                quantity -= 1
-        if craft_result == "worn":
-            quantity -= 1
-        if craft_result == "timeout":
+        last_made = 0
+        if "create" in craft_result and ((bod.exceptional and "exceptional" in craft_result) or (not bod.exceptional)):
+            total_made += 1
+            last_made = 1
+        if craft_result == "timeout" or item_data['stack']:
             return ''
 
 
@@ -3005,7 +3401,7 @@ def return_gump_to_default(skill, last_material):
 
 def choose_gump_material(skill, material_name):
     if not material_name:
-        return ""
+        return "", ""
     global crafting_gump_id
     try:
         material_data = skill_info[skill]['material'][material_name]
@@ -3013,13 +3409,12 @@ def choose_gump_material(skill, material_name):
             if "|" + material_name.upper() not in "|".join(Gumps.LastGumpGetLineList()):
                 answer_craft_gump(7, material_data['btn'])
                 Gumps.WaitForGump(crafting_gump_id, 4000)
-            else:
-                Gumps.CloseGump(crafting_gump_id)
-                return material_name
+            Gumps.CloseGump(crafting_gump_id)
+            return material_name, ""
         else:
-            return "OUT OF TOOLS."
+            return "", "OUT OF TOOLS."
     except Exception:
-        return ""
+        return "", ""
 
 
 def combine_bods(lbods, sbods):
@@ -3040,15 +3435,16 @@ def combine_bods(lbods, sbods):
 
 
 def make_bod():
-    get_containers()
     for skill in skill_info:
-        sbods = lbods = []
+        sbods = []
+        lbods = []
         material = problem = ''
         while not Player.IsGhost:
             bod = Bod(skill, Items.FindByID(0x2258, skill_info[skill]['bod_color'], Player.Backpack.Serial,
-                                            False, True))
+                                            True, True))
             if not bod.serial or problem == "OUT OF TOOLS.":
-                return_gump_to_default(skill, material)
+                if not problem == "OUT OF TOOLS.":
+                    return_gump_to_default(skill, material)
                 break
             problem = ''
             if bod.type == "large":
@@ -3058,31 +3454,48 @@ def make_bod():
                 sbods.append(bod)
                 continue
             bod.start()
-            material = choose_gump_material(skill, bod.material)
+            return_items(bod)
+            material, problem = choose_gump_material(skill, bod.material)
+            bod.get_items_to_fill()
             while not Player.IsGhost:
                 bod.use()
-                Target.Cancel()
-                if (recycle(skill, bod.item['name'])
-                        and "You do not have " in problem):
-                    problem = ''
                 if problem:
-                    error(problem, skill, bod.item['name'], False)
-                    Misc.IgnoreObject(bod.serial)
-                    break
+                    if problem != "OUT OF TOOLS." or skill not in ["Blacksmithing", "Tailoring"]:
+                        recycle(skill, bod.item['name'], bod.material)
+                    if problem == "overweight":
+                        problem = ''
+                    if (problem == "OUT OF TOOLS." and not out_of_resources('tools') and
+                            get_tool(skill) is not None):
+                        problem = ''
+                    if [i for i in ["You do not have ", "You don't have "] if i in problem]:
+                        if bod.get_resources(bod.get_resources_data()):
+                            problem = ''
+                        elif (not out_of_resources(str([res['name'] for res in bod.get_resources_data()])) and
+                              bod.get_resources(bod.get_resources_data())):
+                            problem = ''
+                    if problem:
+                        error(problem, skill, bod.item['name'], False)
+                        Misc.IgnoreObject(bod.serial)
+                        break
                 bod.refresh()
                 if bod.finished():
                     sbods.append(bod)
+                    recycle(skill, bod.item['name'], bod.material)
                     break
-                problem = make_item(bod.item['name'], skill, bod.to_make_quantity(), bod.exceptional)
+                problem = make_bod_items(bod)
         combine_bods(lbods, sbods)
+    return_items()
     Gumps.CloseGump(crafting_gump_id)
-    Gumps.CloseGump(get_gump_num(["A bulk order", "A large bulk order"]))
+    Gumps.CloseGump(get_gump_num(["A bulk order", "A large bulk order"], 500))
 
 
-crafting_gump_id = get_shared("crafting_gump_id")
-trash_barrel = get_shared_item("trash_barrel")
+to_return = []
+cont_xy = {'resources': {'x': 200, 'y': 0}, 'tools': {'x': 50, 'y': 0}, 'stack': {'x': -1, 'y': -1}}
 to_container = Player.Backpack.Serial
+set_macro_containers()
+crafting_gump_id = get_shared("crafting_gump_id")
+bod_gump_id = get_shared("bod_gump_id")
 Misc.ClearIgnore()
-tt = Items.FindBySerial(0x415ACEBD)
-print(dot_container(tt))
-#make_bod()
+make_bod()
+#print(Gumps.GetLineList(0x8C416D40))
+#Gumps.SendAction(0x8C416D40, 2)

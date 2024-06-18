@@ -1,5 +1,60 @@
+import sys
 from datetime import datetime, timedelta
-from make_bod import *
+from AutoComplete import *
+#from make_bod import *
+
+
+def error(text, skill='', item_name='', finish=True):
+    msg = ""
+    if skill:
+        msg = msg + skill
+    if item_name:
+        msg = msg + " | item: " + item_name
+    msg = msg + "\r\n" + text + "\r\n"
+    if finish:
+        msg = msg + "FINISHING." + "\r\n\r\n"
+    Misc.SendMessage(msg, 38)
+    if finish:
+        sys.exit()
+
+
+def dot_container(item):
+    if type(item) is int:
+        item = Items.FindBySerial(item)
+    else:
+        item = Items.FindBySerial(item.Serial)
+    if item:
+        return item.Container
+    return 0
+
+
+def dist(pos1, pos2=Player):
+    pos = [pos1, pos2]
+    for i, _ in enumerate(pos):
+        if type(pos[i]) is not dict:
+            try:
+                _ = pos[i].Serial
+            except Exception:
+                pos[i] = Items.FindBySerial(pos[i])
+        try:
+            if pos[i].Serial == Player.Backpack.Serial:
+                pos[i] = Player
+            if dot_container(pos[i]) > 0:
+                pos[i] = Items.FindBySerial(dot_container(pos[i]))
+                return dist(pos[0], pos[1])
+        except Exception:
+            pass
+        if type(pos[i]) is not dict:
+            try:
+                pos[i] = {'X': pos[i].Position.X, 'Y': pos[i].Position.Y, 'Map': pos[i].Map}
+            except Exception:
+                pos[i] = {'X': pos[i].Position.X, 'Y': pos[i].Position.Y, 'Map': Player.Map}
+    try:
+        if pos[0]['Map'] != pos[1]['Map']:
+            return 10000
+    except Exception:
+        pass
+    return max(abs(pos[0]['X'] - pos[1]['X']), abs(pos[0]['Y'] - pos[1]['Y']))
 
 
 def craft(skill, item_name, resources_id_list, amount=1):
@@ -38,7 +93,7 @@ def cooking():
                 craft(skill, 'miso soup', [foods['miso soup']['raw']], 10)
             else:
                 empty_pitcher = Items.FindByID(int(0x0FF6), int(0x0000), Player.Backpack.Serial, -1, True)
-                water_trough = get_items_by_filter([0x0B41, 0x0B42, 0x0B43, 0x0B44])
+                water_trough = get_first(get_items_by_filter([0x0B41, 0x0B42, 0x0B43, 0x0B44]))
                 if empty_pitcher and water_trough:
                     Items.UseItem(empty_pitcher)
                     if Target.WaitForTarget(4000, False) > 0:
@@ -284,13 +339,14 @@ def lumberjacking():
 
 
 # globals
-crafting_gump_id = get_shared("crafting_gump_id")
-auxiliary_chest = get_shared_item("auxiliary_chest")
-trash_barrel = get_shared_item("trash_barrel")
-ignored_tile_list = temp_ignored_tile_list = []
-Misc.ClearIgnore()
+#crafting_gump_id = get_shared("crafting_gump_id")
+#auxiliary_chest = get_shared_item("auxiliary_chest")
+#trash_barrel = get_shared_item("trash_barrel")
+ignored_tile_list = []
+temp_ignored_tile_list = []
+#Misc.ClearIgnore()
 
-mysticism()
+#mysticism()
 # function calls
 # cartography()
-# lumberjacking()
+lumberjacking()
