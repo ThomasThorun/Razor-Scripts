@@ -217,25 +217,6 @@ class Bod:
         return False
 
 
-def get_from_storage_chest(item_id, color):
-    storage_refs = {(0x1BF2, 0x0000): ('IronIngot', 100), (0x1BF2, 0x0973): ('DullCopperIngot', 101),
-                    (0x1BF2, 0x0966): ('ShadowIronIngot', 102), (0x1BF2, 0x096D): ('CopperIngot', 103),
-                    (0x1BF2, 0x0972): ('BronzeIngot', 104), (0x1BF2, 0x08A5): ('GoldIngot', 105),
-                    (0x1BF2, 0x0979): ('AgapiteIngot', 106), (0x1BF2, 0x089F): ('VeriteIngot', 107),
-                    (0x1BF2, 0x08AB): ('ValoriteIngot', 108),
-                    (0x1BD7, 0x0000): ('Board', 107), (0x1BD7, 0x07DA): ('OakBoard', 108),
-                    (0x1BD7, 0x04A7): ('AshBoard', 109), (0x1BD7, 0x04A8): ('YewBoard', 110),
-                    (0x1BD7, 0x04A9): ('HeartwoodBoard', 111), (0x1BD7, 0x04AA): ('BloodwoodBoard', 112),
-                    (0x1BD7, 0x047F): ('FrostwoodBoard', 113),
-                    (0x1BDD, 0x0000): ('Log', 100), (0x1BDD, 0x07DA): ('OakLog', 101),
-                    (0x1BDD, 0x04A7): ('AshLog', 102), (0x1BDD, 0x04A8): ('YewLog', 103),
-                    (0x1BDD, 0x04A9): ('HeartwoodLog', 104), (0x1BDD, 0x04AA): ('BloodwoodLog', 105),
-                    (0x1BDD, 0x047F): ('FrostwoodLog', 106),
-                    (0x1081, 0x0000): ('Leather', 100), (0x1081, 0x08AC): ('SpinedLeather', 101),
-                    (0x1081, 0x0845): ('HornedLeather', 102), (0x1081, 0x0851): ('BarbedLeather', 103),
-                    ("Cut Cloth", 0x0000): ('Cloth', 110), ("Bolt Of Cloth", 0x0000): ('BoltOfCloth', 111)}
-
-
 alchemy_gump = {
     'categories':
         [('Exit', 0), ('Cancel Make', 227), ('Non Quest Item', 207), ('Make Last', 47), ('Last Ten', 67),
@@ -2419,19 +2400,19 @@ tinkering_gump = {
     ('Utensils', 81):
         {"Butcher Knife": {'btn': 2, 'stack': False, 'mats':
             [("Ingots", 2)]},
-         "Spoon (Left)": {'btn': 22, 'stack': False, 'mats':
+         "Spoon": {'btn': 22, 'stack': False, 'mats':
              [("Ingots", 1)]},
          "Spoon (Right)": {'btn': 42, 'stack': False, 'mats':
              [("Ingots", 1)]},
          "Plate": {'btn': 62, 'stack': False, 'mats':
              [("Ingots", 2)]},
-         "Fork (Left)": {'btn': 82, 'stack': False, 'mats':
+         "Fork": {'btn': 82, 'stack': False, 'mats':
              [("Ingots", 1)]},
          "Fork (Right)": {'btn': 102, 'stack': False, 'mats':
              [("Ingots", 1)]},
          "Cleaver": {'btn': 122, 'stack': False, 'mats':
              [("Ingots", 3)]},
-         "Knife (Left)": {'btn': 142, 'stack': False, 'mats':
+         "Knife": {'btn': 142, 'stack': False, 'mats':
              [("Ingots", 1)]},
          "Knife (Right)": {'btn': 162, 'stack': False, 'mats':
              [("Ingots", 1)]},
@@ -2535,7 +2516,7 @@ tinkering_gump = {
              [("Axles with Gears", 1), ("Springs", 1)]},
          "Sextant Parts": {'btn': 42, 'stack': False, 'mats':
              [("Axles with Gears", 1), ("Hinges", 1)]},
-         "Clock (Right)": {'btn': 62, 'stack': False, 'mats':
+         "Clock": {'btn': 62, 'stack': False, 'mats':
              [("Clock Frames", 1), ("Clock Parts", 1)]},
          "Clock (Left)": {'btn': 82, 'stack': False, 'mats':
              [("Clock Frames", 1), ("Clock Parts", 1)]},
@@ -3088,6 +3069,26 @@ def check_more_actions(resource_id):
     return False
 
 
+# developing this. still with no use.
+def get_resource_from_gump(item_id, color):
+    storage_refs = {(0x1BF2, 0x0000): ('IronIngot', 100), (0x1BF2, 0x0973): ('DullCopperIngot', 101),
+                    (0x1BF2, 0x0966): ('ShadowIronIngot', 102), (0x1BF2, 0x096D): ('CopperIngot', 103),
+                    (0x1BF2, 0x0972): ('BronzeIngot', 104), (0x1BF2, 0x08A5): ('GoldIngot', 105),
+                    (0x1BF2, 0x0979): ('AgapiteIngot', 106), (0x1BF2, 0x089F): ('VeriteIngot', 107),
+                    (0x1BF2, 0x08AB): ('ValoriteIngot', 108),
+                    (0x1BD7, 0x0000): ('Board', 107), (0x1BD7, 0x07DA): ('OakBoard', 108),
+                    (0x1BD7, 0x04A7): ('AshBoard', 109), (0x1BD7, 0x04A8): ('YewBoard', 110),
+                    (0x1BD7, 0x04A9): ('HeartwoodBoard', 111), (0x1BD7, 0x04AA): ('BloodwoodBoard', 112),
+                    (0x1BD7, 0x047F): ('FrostwoodBoard', 113),
+                    (0x1BDD, 0x0000): ('Log', 100), (0x1BDD, 0x07DA): ('OakLog', 101),
+                    (0x1BDD, 0x04A7): ('AshLog', 102), (0x1BDD, 0x04A8): ('YewLog', 103),
+                    (0x1BDD, 0x04A9): ('HeartwoodLog', 104), (0x1BDD, 0x04AA): ('BloodwoodLog', 105),
+                    (0x1BDD, 0x047F): ('FrostwoodLog', 106),
+                    (0x1081, 0x0000): ('Leather', 100), (0x1081, 0x08AC): ('SpinedLeather', 101),
+                    (0x1081, 0x0845): ('HornedLeather', 102), (0x1081, 0x0851): ('BarbedLeather', 103),
+                    ("Cut Cloth", 0x0000): ('Cloth', 110), ("Bolt Of Cloth", 0x0000): ('BoltOfCloth', 111)}
+
+
 def get_resource(resource_id_list, color=-1, resource_needed=1, to_make_amount=1, stack=False):
     global cont_xy
     total_amount_found = 0
@@ -3497,5 +3498,3 @@ crafting_gump_id = get_shared("crafting_gump_id")
 bod_gump_id = get_shared("bod_gump_id")
 Misc.ClearIgnore()
 make_bod()
-#print(Gumps.GetLineList(0x8C416D40))
-#Gumps.SendAction(0x8C416D40, 2)

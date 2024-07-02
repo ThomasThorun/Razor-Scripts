@@ -187,6 +187,7 @@ def wait_journal(timeout, skill):
 
 
 def answer(message):
+    Journal.Clear()
     if message in ['wait', 'already']:
         Misc.Pause(2000)
         return 'continue'
@@ -304,7 +305,6 @@ def chop(_char_pos, attempts):
                 return False
             check_heavy()
             equip_hand_from_id_list(utils['axe'])
-            Journal.Clear()
             use_from_id_list(utils['axe'])
             Target.WaitForTarget(4000)
             Target.TargetExecute(tree['X'], tree['Y'], tree['Z'], tree['Tile'])
@@ -344,6 +344,7 @@ def lumberjacking():
 #trash_barrel = get_shared_item("trash_barrel")
 ignored_tile_list = []
 temp_ignored_tile_list = []
+Journal.Clear()
 #Misc.ClearIgnore()
 
 #mysticism()
