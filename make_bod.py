@@ -3,6 +3,10 @@ from System.Collections.Generic import List
 from System import Int32
 from AutoComplete import *
 
+
+# if this variable is true, it will look into any nearby chest for resources/tools. So not needed to set auxiliary_chest
+look_into_nearby_chests = True
+
 # set this two variables below to the Serial of the auxiliary chest / trash_barrel if you want to avoid to set it
 # ingame by answering some questions.
 auxiliary_chest = 0x00000000
@@ -2699,24 +2703,30 @@ def name_mats_compare(mat_name, item):
 
 
 def document_chest(container):
+    def container_contains(cont, timeout=1000):
+        for _ in range(int(timeout/100)):
+            check_save()
+            Misc.Pause(100)
+            contents = cont.Contains
+            if Journal.Search("You must wait to perform another action."):
+                Journal.Clear()
+                Misc.Pause(1000)
+                Items.UseItem(cont)
+                container_contains(cont, timeout)
+            if contents:
+                return contents
+        return []
+
     if type(container) is int:
         container = Items.FindBySerial(container)
-    if container.Serial == auxiliary_chest.Serial:
-        check_save()
-        Items.UseItem(container)
-        Misc.Pause(1500)
-    for item in container.Contains:
+
+    Journal.Clear()
+    check_save()
+    Items.UseItem(container)
+    for item in container_contains(container):
         if item.IsContainer:
-            while not item.Contains:
-                Journal.Clear()
-                check_save()
-                Items.UseItem(item)
-                Misc.Pause(1000)
-                check_save()
-                Items.Close(item)
-                if not Journal.Search("You must wait to perform another action."):
-                    break
             document_chest(item)
+    Items.Close(container)
 
 
 def contains(container, color=-1, recursive=True, exceptional=False):
@@ -2920,30 +2930,37 @@ def get_workable_container(chest_serial, chest_name):
 
 
 def out_of_resources(name):
-    global auxiliary_chest
+    if look_into_nearby_chests:
+        Misc.SendMessage("Can't find " + name + ". Skipping this BOD.\r\n", 38)
+        return True
+
+    global auxiliary_chest, nearby_chests
     aux = auxiliary_chest
     if auxiliary_chest_questions:
         auxiliary_chest = get_and_set_shared_container("auxiliary_chest",
                                                        "Can't find " + name + ", please select the container where"
                                                        + " the " + name + " are (Or ESC to skip this bod.)"
                                                        + "\r\n")
+        nearby_chests = [auxiliary_chest]
         if auxiliary_chest and auxiliary_chest == aux:
             return True
         if auxiliary_chest:
             document_chest(auxiliary_chest)
             return False
     auxiliary_chest = aux
+    nearby_chests = [auxiliary_chest]
     return True
 
 
 def set_macro_containers():
-    global trash_barrel, auxiliary_chest
-    auxiliary_chest = get_workable_container(auxiliary_chest, "auxiliary_chest")
+    global trash_barrel, nearby_chests, auxiliary_chest
     trash_barrel = get_workable_container(trash_barrel, "trash_barrel")
-    if (not auxiliary_chest) and auxiliary_chest_questions:
-        auxiliary_chest = get_and_set_shared_container("auxiliary_chest",
-                                                       "Target an auxiliary container, if you want to grab resources "
-                                                       + "from it.\r\n(Hit ESC to use only backpack resources).")
+    if not look_into_nearby_chests:
+        auxiliary_chest = get_workable_container(auxiliary_chest, "auxiliary_chest")
+        if (not auxiliary_chest) and auxiliary_chest_questions:
+            auxiliary_chest = get_and_set_shared_container("auxiliary_chest", "Target an auxiliary container,"
+                                                           + " if you want to grab resources from it."
+                                                           + "\r\n(Hit ESC to use only backpack resources).")
     if (not trash_barrel) and trash_barrel_questions:
         for skill in skill_info:
             if Items.FindByID(0x2258, skill_info[skill]['bod_color'], Player.Backpack.Serial, False, True):
@@ -2952,9 +2969,12 @@ def set_macro_containers():
                                                                 "(Hit ESC to trash no items).\r\n Target some bag " +
                                                                 "if you just want to organize the leftovers there.")
                     break
-    if auxiliary_chest:
-        Misc.SendMessage("\r\n!!! Please Wait !!!\r\n...Acknowledging container...\r\n", 78)
-        document_chest(auxiliary_chest)
+    nearby_chests = get_items_by_filter(None, None, 2, True, True)\
+        if look_into_nearby_chests else [auxiliary_chest]
+    if nearby_chests:
+        Misc.SendMessage("\r\n!!! Please Wait !!!\r\n...Acknowledging containers...\r\n", 78)
+        for chest in nearby_chests:
+            document_chest(chest)
         Misc.SendMessage("\r\n...Finished...\r\n", 78)
 
 
@@ -2982,6 +3002,21 @@ def meditate():
             Misc.Pause(1000)
 
 
+def last_gump_lines(timeout=5000):
+    for _ in range(int(timeout/10)):
+        if Gumps.CurrentGump() == crafting_gump_id:
+            line_list = Gumps.LastGumpGetLineList()
+            try:
+                for _ in line_list:
+                    continue
+                if line_list:
+                    return line_list
+            except Exception:
+                pass
+        Misc.Pause(10)
+    return []
+
+
 def wait_craft_gump(gump_num, timeout):
     gump_open = False
     for _ in range(int(timeout / 100)):
@@ -3003,8 +3038,8 @@ def wait_craft_gump(gump_num, timeout):
     if gump_open:
         msg_list = [("You failed ", 40), ("You create an exceptional", 68), ("You create the", 90),
                     ("You do not have ", 28), ("You don't have ", 28), ("You must be near ", 28)]
-        for msg in msg_list:
-            for line in Gumps.LastGumpGetLineList():
+        for line in last_gump_lines():
+            for msg in msg_list:
                 if msg[0] in line:
                     if msg[1] != 28:
                         Misc.SendMessage(line, msg[1])
@@ -3029,12 +3064,14 @@ def get_gump_num(text_list, timeout=10000):
 
 def get_scissors():
     scissors = get_first(find_items_list([0x0F9F], Player.Backpack))
-    if not scissors and auxiliary_chest:
-        scissors = get_first(find_items_list([0x0F9F], auxiliary_chest))
-        if scissors:
-            refresh_to_return(scissors)
-            throw_items([scissors], Player.Backpack, 0)
-            Misc.Pause(500)
+    if not scissors and nearby_chests:
+        for chest in nearby_chests:
+            scissors = get_first(find_items_list([0x0F9F], chest))
+            if scissors:
+                refresh_to_return(scissors)
+                throw_items([scissors], Player.Backpack, 0)
+                Misc.Pause(500)
+                break
     return scissors
 
 
@@ -3096,8 +3133,8 @@ def get_resource(resource_id_list, color=-1, resource_needed=1, to_make_amount=1
         amount_found = grabbed = to_grab = 0
         name = 'resources'
         container_list = [Player.Backpack]
-        if auxiliary_chest:
-            container_list.append(auxiliary_chest)
+        if nearby_chests:
+            container_list.extend(nearby_chests)
         for _ in range(5):
             for container in container_list:
                 resource_list = find_items_list([resource_id], container, color, True)
@@ -3301,8 +3338,8 @@ def get_tool(skill, look_on_ground=True):
         container_list.append(salvage_bag.Serial)
         to_container = salvage_bag.Serial
     container_list.append(Player.Backpack.Serial)
-    if auxiliary_chest:
-        container_list.append(auxiliary_chest.Serial)
+    if nearby_chests:
+        container_list.extend([n.Serial for n in nearby_chests])
     for _ in range(3):
         for i, container in enumerate(container_list):
             tool_list = find_items_list(tool_cod_list, container, -1, True)
@@ -3493,6 +3530,7 @@ def make_bod():
 to_return = []
 cont_xy = {'resources': {'x': 200, 'y': 0}, 'tools': {'x': 50, 'y': 0}, 'stack': {'x': -1, 'y': -1}}
 to_container = Player.Backpack.Serial
+nearby_chests = []
 set_macro_containers()
 crafting_gump_id = get_shared("crafting_gump_id")
 bod_gump_id = get_shared("bod_gump_id")

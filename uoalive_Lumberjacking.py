@@ -183,17 +183,31 @@ def unmount():
 
 
 def unload(unload_containers, to_container, ids_list=None, color_list=None, name_list=None, amount=0):
+
+    def wait_transfer(timeout):
+        for _ in range(int(timeout/100)):
+            Misc.Pause(100)
+            it = Items.FindBySerial(item.Serial)
+            to_container_contents = Items.FindBySerial(to_container).Contains
+            if not it or it.Serial in [i.Serial for i in to_container_contents] or it.Amount < i_amount:
+                return True
+        return False
+
     for container in unload_containers:
         for item_id in ids_list:
-            while True:
-                item = Items.FindByID(item_id, -1, container.Serial, -1, True)
-                if not item:
-                    break
+            items = Items.FindAllByID([item_id], -1, container.Serial, -1, True)
+            for item in items:
                 if (color_list and item.Hue not in color_list) or (name_list and item.Name not in name_list):
                     Misc.IgnoreObject(item.Serial)
                     continue
-                Items.Move(item, to_container, amount)
-                Misc.Pause(1000)
+                i_amount = item.Amount
+                for _ in range(3):
+                    if dist(to_container) > 2:
+                        break
+                    Items.Move(item, to_container, amount)
+                    if wait_transfer(2000):
+                        break
+
     Misc.ClearIgnore()
 
 
@@ -251,12 +265,12 @@ def beetle_store():
     return False
 
 
-def make_boards(_axe):
+def make_boards():
     while not Player.IsGhost:
         log = Items.FindByID(utils['Log'], -1, Player.Backpack.Serial, -1, True)
         if not log:
             break
-        Items.UseItem(_axe)
+        Items.UseItem(axe)
         Target.WaitForTarget(3000)
         Target.TargetExecute(log.Serial)
         Misc.Pause(500)
@@ -375,7 +389,7 @@ def lumberjacking():
         check_unload()
         char_pos = (Player.Position.X, Player.Position.Y, Player.Map)
         chop(char_pos, 15)
-        make_boards(axe)
+        make_boards()
 
         trees = get_trees(2, True)
         ignored_tile_list = refresh_ignore()
