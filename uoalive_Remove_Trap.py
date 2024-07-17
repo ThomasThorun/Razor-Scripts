@@ -1,8 +1,46 @@
 import sys
 from datetime import datetime, timedelta
+from AutoComplete import *
+
+
+# Script by ThomasThorun. The Turbo Solver was SimonSoft (https://github.com/caporalesimone/) idea.
+turbo_solver = True
 
 
 class Puzzle:
+    known_solutions = {3: [[2, 3, 2, 3],
+                           [2, 3, 3, 2],
+                           [2, 3, 4, 3, 2, 2],
+                           [2, 2, 3, 3],
+                           [3, 2, 2, 3],
+                           [3, 2, 3, 2],
+                           [3, 3, 2, 2],
+                           [3, 3, 2, 1, 1, 2, 3, 3]],
+                       4: [[3, 2, 2, 2, 3, 3],
+                           [3, 2, 2, 1, 2, 3, 3, 3],
+                           [3, 2, 3, 2, 2, 3],
+                           [3, 3, 2, 1, 2, 2, 3, 3],
+                           [3, 3, 2, 2, 1, 1, 2, 3, 3, 3],
+                           [3, 3, 3, 2, 2, 2],
+                           [2, 3, 4, 3, 2, 2, 3, 2],
+                           [2, 3, 4, 3, 3, 2, 2, 2],
+                           [2, 3, 2, 2, 3, 3],
+                           [2, 2, 2, 3, 3, 3],
+                           [2, 2, 2, 3, 4, 4, 4, 3, 2, 2, 2, 3],
+                           [2, 2, 3, 2, 3, 3]],
+                       5: [[3, 3, 2, 3, 2, 2, 3, 2],
+                           [3, 3, 2, 2, 2, 1, 4, 4, 1, 2, 2, 2, 3, 3, 3, 3],
+                           [3, 3, 3, 3, 2, 2, 2, 2],
+                           [3, 2, 3, 2, 2, 3, 2, 3],
+                           [3, 2, 3, 3, 3, 2, 1, 1, 1, 2, 2, 3, 3, 3],
+                           [3, 2, 2, 1, 2, 2, 3, 3, 3, 3],
+                           [2, 3, 4, 3, 2, 2, 3, 2, 2, 3],
+                           [2, 3, 4, 3, 3, 2, 2, 1, 1, 2, 2, 3, 3, 3],
+                           [2, 3, 2, 2, 3, 4, 3, 2, 2, 3],
+                           [2, 2, 2, 2, 3, 3, 3, 3],
+                           [2, 2, 2, 2, 3, 3, 4, 4, 3, 3, 2, 2],
+                           [2, 2, 3, 2, 2, 3, 4, 4, 4, 4, 3, 3, 2, 2, 2, 2]]}
+
     def __init__(self, timeout=400):
         self.skill = {'start': Player.GetSkillValue('Remove Trap'),
                       'now': Player.GetSkillValue('Remove Trap'),
@@ -11,16 +49,18 @@ class Puzzle:
         self.messages = {
             'success': "You successfully disarm the trap",
             'fail': "You fail to disarm the trap and reset it"}
-        self.dirs = {1: ("up", (-1, 0)),
-                     2: ("right", (0, 1)),
-                     3: ("down", (1, 0)),
-                     4: ("left", (0, -1))}
+        self.dirs = {1: ("↑", (-1, 0)),
+                     2: ("→", (0, 1)),
+                     3: ("↓", (1, 0)),
+                     4: ("←", (0, -1))}
         self.runs = {'total': 0, 'fails': 0, 'successes': 0}
         self.bau_list = get_bau_list()
         self.bau = self.get_bau()
         self.gump, self.size = -1, -1
         self.timeout = timeout
+        self.total_time = timedelta(0)
         self.start_time = self.reset_time()
+        self.excluded_paths = []
         self.path, self.m_idx, self.matrix = self.reset()
 
     def get_bau(self):
@@ -97,23 +137,44 @@ class Puzzle:
         self.runs['total'] += 1
         if run_status == 'Success':
             self.runs['successes'] += 1
+            self.total_time = self.total_time + (datetime.now() - self.start_time)
         else:
             self.runs['fails'] += 1
         self.skill['now'] = Player.GetSkillValue('Remove Trap')
 
     def print_run_data(self, state, message):
         t = {'Success': ('solve', 0x45), 'Fail': ('run', 0x20)}
+        try:
+            average = str(self.total_time/self.runs['successes']).split(".")[0]
+        except Exception:
+            average = str(0)
         Misc.SendMessage(state + '! ' + str(self.size) + 'x' + str(self.size) + ' gump \r\n' + t[state][0] + ' time: ' +
-                         str(datetime.now() - self.start_time).split(".")[0] + ' ' + message + '\r\n', t[state][1])
+                         str(datetime.now() - self.start_time).split(".")[0] + '\r\naverage: ' +
+                         average + '\r\n' + message + '\r\n', t[state][1])
         Misc.SendMessage('runs: ' + str(self.runs['total']) + '\r\n' + 'successes: ' + str(self.runs['successes']) +
                          ', fails: ' + str(self.runs['fails']) + '\r\n', 0x95)
-        Misc.SendMessage('Skill:\r\nstart: ' + str(self.skill['start']) + '\r\nnow: ' + str(self.skill['now']) +
-                         '\r\ngain: ' + str(self.skill['now'] - self.skill['start']) + '\r\n', 0x39)
+        Misc.SendMessage('Skill:\r\nstart: ' + str('%.1f' % self.skill['start']) +
+                         '\r\nnow: ' + str('%.1f' % self.skill['now']) +
+                         '\r\ngain: ' + str('%.1f' % (self.skill['now'] - self.skill['start'])) + '\r\n', 0x39)
+
+    def get_buttons(self):
+        def excluded_path():
+            for p in self.excluded_paths:
+                if p[0] > len(path) or path[p[0]] == p[1]:
+                    return True
+            return False
+
+        for path in Puzzle.known_solutions[self.size]:
+            if excluded_path():
+                continue
+            return path[len(self.path):]
+        return []
 
     def finish(self, state, message):
         self.set_run_data(state)
         self.print_run_data(state, message)
         self.check_skill()
+        self.excluded_paths = []
         self.reset_time()
         self.reset()
 
@@ -127,7 +188,8 @@ def get_bau_list():
             if i > 1:
                 msg = ('dispute solving: Target a ' + rank[i][0] + ' option circuit trap training kit in your range.' +
                        '\r\nJust hit ESC or target anything else if just ' + rank[i][1] + ' is enough.')
-            bau = Items.FindBySerial(Target.PromptTarget(msg))
+            Misc.SendMessage(msg, 65)
+            bau = Items.FindBySerial(Target.PromptTarget(""))
             if bau and bau.ItemID == 0xA393:
                 bau_list.append(bau)
             else:
@@ -135,7 +197,7 @@ def get_bau_list():
         if bau_list:
             return circular(bau_list)
         else:
-            Misc.SendMessage('is that a circuit trap training kit?')
+            Misc.SendMessage('is that a circuit trap training kit?', 28)
 
 
 def circular(args):
@@ -195,7 +257,7 @@ def remove_trap():
     puzzle = Puzzle()
     while True:
         attempt_result = 0
-        for num_button in (2, 3, 4, 1):
+        for num_button in puzzle.get_buttons() if turbo_solver else [2, 3, 4, 1]:
             if puzzle.check_timeout():
                 puzzle.finish('Fail', '| Something went wrong - timeout')
                 break
@@ -204,16 +266,19 @@ def remove_trap():
                 attempt_result = -1
                 continue
 
-            Misc.SendMessage("path = " + " ".join([puzzle.dirs[v][0] for v in puzzle.path]) +
-                             " | trying " + puzzle.dirs[num_button][0], 0x60)
+            Misc.SendMessage("path = " + "".join([puzzle.dirs[v][0] for v in puzzle.path]) +
+                             " | trying " + puzzle.dirs[num_button][0], 90)
 
             attempt_result = build_path(puzzle, [num_button])
-            if not attempt_result == -1:
+            if not attempt_result == (0 if turbo_solver else -1):
+                if attempt_result == -1:
+                    puzzle.excluded_paths.append((len(puzzle.path), num_button))
                 break
-        if attempt_result == -1:
+        if (attempt_result == -1 and not turbo_solver) or (turbo_solver and not puzzle.get_buttons()):
             puzzle.change_bau()
             puzzle.finish('Fail',
                           '| Something is wrong. Maybe someone else is using the same box? trying the next ' +
                           str(puzzle.bau))
+
 
 remove_trap()
